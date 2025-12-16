@@ -9,22 +9,17 @@ import numpy as np
 import os
 import time
 
-# --- IMPORTS DE NOS MODULES ---
+
 from src.dataset import DeepfakeDataset
 from src.model import DeepFakeMobileNet
 
-# --- CONFIGURATION (HYPERPARAMÈTRES) ---
-BATCH_SIZE = 32          # Baisser à 16 si "Out of Memory"
-LEARNING_RATE = 1e-4     # Petit LR pour ne pas casser les poids pré-entraînés
-EPOCHS = 5               # 5 époques suffisent pour voir si ça apprend (Baseline)
-NUM_WORKERS = 0          # Mettre 0 pour éviter les bugs sous Windows, sinon 2 ou 4 sous Linux
+# hyperparameters
+BATCH_SIZE = 32          
+LEARNING_RATE = 1e-4     # little learning rate for fine-tuning
+EPOCHS = 10              
+NUM_WORKERS = 0          # 0 for Windows, otherwise set to number of CPU cores
 DEVICE = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
 
-# Si Mac M1/M2
-if torch.backends.mps.is_available():
-    DEVICE = torch.device("mps")
-
-print(f"🚀 Entraînement lancé sur : {DEVICE}")
 
 def train_one_epoch(model, loader, criterion, optimizer, scaler):
     model.train()
@@ -39,10 +34,10 @@ def train_one_epoch(model, loader, criterion, optimizer, scaler):
         
         optimizer.zero_grad()
         
-        # --- MIXED PRECISION (Accélération GPU) ---
-        # Si GPU NVIDIA, on utilise autocast
+        # Accelerated training with mixed precision
         if DEVICE.type == 'cuda':
-            with torch.cuda.amp.autocast():
+            # Warning correcte : torch.cuda.amp.autocast is only available on CUDA devices
+            with torch.amp.autocast('cuda'):
                 outputs = model(images)
                 loss = criterion(outputs, labels)
             
@@ -50,7 +45,6 @@ def train_one_epoch(model, loader, criterion, optimizer, scaler):
             scaler.step(optimizer)
             scaler.update()
         else:
-            # CPU ou MPS (Mac) standard
             outputs = model(images)
             loss = criterion(outputs, labels)
             loss.backward()
@@ -58,7 +52,6 @@ def train_one_epoch(model, loader, criterion, optimizer, scaler):
         
         running_loss += loss.item()
         
-        # Stockage pour métriques (sigmoid pour passer de logits à probabilité 0-1)
         probs = torch.sigmoid(outputs).detach().cpu().numpy()
         all_labels.extend(labels.cpu().numpy())
         all_preds.extend(probs)
@@ -67,11 +60,10 @@ def train_one_epoch(model, loader, criterion, optimizer, scaler):
         
     avg_loss = running_loss / len(loader)
     
-    # Calcul métriques (gestion cas où une seule classe est présente dans le batch)
     try:
         epoch_auc = roc_auc_score(all_labels, all_preds)
     except ValueError:
-        epoch_auc = 0.5 # Fallback si pas assez de données variées
+        epoch_auc = 0.5 
         
     epoch_acc = accuracy_score(all_labels, np.round(all_preds))
     
@@ -105,57 +97,70 @@ def validate(model, loader, criterion):
     return avg_loss, val_acc, val_auc
 
 def main():
-    # 1. Transformations (Standard ImageNet)
+    # We apply data augmentations only on Train to avoid "memorization"
     train_transform = transforms.Compose([
         transforms.Resize((224, 224)),
-        transforms.RandomHorizontalFlip(), # Data Augmentation simple
+        
+        # 1.Miroir horizontal (50% chance)
+        transforms.RandomHorizontalFlip(p=0.5),
+        
+        # 2. Light rotation (-15 to +15 degrés)
+        transforms.RandomRotation(degrees=15),
+        
+        # 3. Changing of brightness/contrast/saturation/hue
+        transforms.ColorJitter(brightness=0.2, contrast=0.2, saturation=0.1, hue=0.05),
+        
+        # 4. Gaussian Blur (20% chance)
+        transforms.RandomApply([transforms.GaussianBlur(kernel_size=3)], p=0.2),
+        
         transforms.ToTensor(),
         transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
     ])
     
+    # Validation : We keep it simple, no augmentation
     val_transform = transforms.Compose([
         transforms.Resize((224, 224)),
         transforms.ToTensor(),
         transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
     ])
 
-    # 2. Datasets & Loaders
-    print("📁 Chargement des données...")
-    # NOTE: Pour l'Assignment 2, on utilise 'train' pour l'entrainement
-    # Si tu n'as pas créé de dossier 'val', on utilise 'train' aussi pour valider (juste pour tester le code)
-    # Dans un vrai projet, il faut séparer les dossiers.
-    train_dataset = DeepfakeDataset(root_dir="data/processed", split='train', transform=train_transform)
+    # VIDEO-LEVEL SPLIT
+    print("We load the datasets...")
     
-    # HACK : Si pas de dossier val, on split manuellement ou on utilise train (déconseillé mais ok pour debug)
-    val_dir = "data/processed/val" if os.path.exists("data/processed/val") else "data/processed/train"
-    val_dataset = DeepfakeDataset(root_dir="data/processed", split='train', transform=val_transform) 
+    # We explicitly load 'train' and 'val' folders
+    train_dataset = DeepfakeDataset(root_dir="data/processed", split='train', transform=train_transform)
+    val_dataset = DeepfakeDataset(root_dir="data/processed", split='val', transform=val_transform) 
 
     if len(train_dataset) == 0:
-        print("❌ Erreur : Dataset vide ! Lance preprocess.py d'abord.")
+        print("Error the dataset train is empty.")
         return
+    
+    if len(val_dataset) == 0:
+        print("Error the dataset Val is empty.")
 
     train_loader = DataLoader(train_dataset, batch_size=BATCH_SIZE, shuffle=True, num_workers=NUM_WORKERS)
     val_loader = DataLoader(val_dataset, batch_size=BATCH_SIZE, shuffle=False, num_workers=NUM_WORKERS)
     
-    print(f"📊 Images d'entraînement : {len(train_dataset)}")
+    print(f"Images Train : {len(train_dataset)} | Images Val : {len(val_dataset)}")
 
-    # 3. Modèle
+    # 3. Model
     model = DeepFakeMobileNet(pretrained=True).to(DEVICE)
     
     # 4. Loss & Optimizer
-    # pos_weight > 1 pour donner plus d'importance aux Fakes s'ils sont rares (ou inversement)
-    # Pour la baseline, on laisse à 1.0 (équilibré) ou on ajuste selon le dataset.
+    # Weighted Binary Cross-Entropy Loss to compensate class imbalance
     pos_weight = torch.tensor([1.0]).to(DEVICE) 
     criterion = nn.BCEWithLogitsLoss(pos_weight=pos_weight)
     
-    optimizer = optim.Adam(model.parameters(), lr=LEARNING_RATE)
+    # We add L2 Regularization via weight_decay to prevent overfitting
+    optimizer = optim.Adam(model.parameters(), lr=LEARNING_RATE, weight_decay=1e-5)
+    
     scaler = torch.cuda.amp.GradScaler(enabled=(DEVICE.type == 'cuda'))
 
-    # 5. Boucle
+    # 5. Training Loop
     best_auc = 0.0
     start_time = time.time()
     
-    print("🔥 Démarrage de l'entraînement...")
+    print("Starting training...")
     for epoch in range(EPOCHS):
         print(f"\nEpoch {epoch+1}/{EPOCHS}")
         
@@ -165,15 +170,15 @@ def main():
         print(f"   Train Loss: {train_loss:.4f} | Acc: {train_acc:.4f} | AUC: {train_auc:.4f}")
         print(f"   Val   Loss: {val_loss:.4f} | Acc: {val_acc:.4f} | AUC: {val_auc:.4f}")
         
-        # Sauvegarde du meilleur modèle
+        # We save the best model based on Val AUC
         if val_auc > best_auc:
             best_auc = val_auc
             torch.save(model.state_dict(), "best_model.pth")
-            print("   ✅ Modèle sauvegardé (Nouveau record AUC)")
+            print(" We save the new best model.")
 
     total_time = time.time() - start_time
-    print(f"\n🏁 Entraînement terminé en {total_time/60:.1f} minutes.")
-    print(f"🏆 Meilleur AUC atteint : {best_auc:.4f}")
+    print(f"\n Training is done in  {total_time/60:.1f} minutes.")
+    print(f"🏆 Best AUC : {best_auc:.4f}")
 
 if __name__ == "__main__":
     main()
