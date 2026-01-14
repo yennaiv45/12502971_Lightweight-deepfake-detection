@@ -57,20 +57,19 @@ By optimizing scripts (MTCNN Batch Processing on GPU) and implementing smart dat
 * **Head:** Replacement of the final classifier with a linear layer for binary classification (Real vs. Fake).
 * **Loss Function:** `BCEWithLogitsLoss` for numerical stability, utilizing `pos_weight` to handle class imbalance.
 
-## How to Run
+1. **Clone the repository:**
+   ```bash
+   git clone https://github.com/yennaiv45/12502971_Lightweight-deepfake-detection.git
+   cd ./12502971_Lightweight-deepfake-detection
 
 1.  **Install dependencies:**
     ```bash
     pip install -r requirements.txt
     ```
 
-2.  **Run Preprocessing (Face Extraction):**
+2.  **Run**
     ```bash
-    python src/preprocess.py
+    streamlit run .\src\app_streamlit.py
     ```
 
-3.  **Train the Model:**
-    ```bash
-    python train.py
-    ```
 
