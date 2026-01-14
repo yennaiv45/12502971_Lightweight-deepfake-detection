@@ -15,13 +15,14 @@ IMG_SIZE = 224
 SPLIT_RATIO = 0.8        # 80% Train, 20% Val
 
 def extract_faces_split_fast(source_dir, dest_dir):
-    # 0. We clean the dest_dir if it exists
+    # 0. Clean the destination directory if it exists
     if os.path.exists(dest_dir):
-        print(f" We clean the folder {dest_dir}...")
+        print(f"Cleaning the destination folder: {dest_dir}...")
         shutil.rmtree(dest_dir)
 
-    # 1. Setup GPU
+    # 1. Setup GPU device
     device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
+    print(f"Running on device: {device}")
     
     mtcnn = MTCNN(
         image_size=IMG_SIZE, margin=0, keep_all=False, 
@@ -33,35 +34,34 @@ def extract_faces_split_fast(source_dir, dest_dir):
     for folder_name in folders:
         folder_path = os.path.join(source_dir, folder_name)
         
-        # We determine the label based on folder name
+        # Determine the label based on the folder name
         label = 'fake' if 'synthesis' in folder_name.lower() or 'fake' in folder_name.lower() else 'real'
         
-        # List every video in the folder
+        # List all videos in the folder
         all_videos = [f for f in os.listdir(folder_path) if f.endswith(('.mp4', '.avi', '.mov'))]
         
-        # Mixing the list for randomness
+        # Shuffle the list for randomness
         random.seed(42)
         random.shuffle(all_videos)
         
-        # Limiting the number of videos per class for faster testing
+        # Limit the number of videos per class for faster processing
         if len(all_videos) > MAX_VIDEOS_PER_CLASS:
-            print(f" We only keep {MAX_VIDEOS_PER_CLASS} videos for {label}")
+            print(f"Limiting to {MAX_VIDEOS_PER_CLASS} videos for class '{label}'")
             all_videos = all_videos[:MAX_VIDEOS_PER_CLASS]
 
-        # The split index
-        # It gives us the number of videos for training
+        # Calculate the split index for train/validation sets
         split_idx = int(len(all_videos) * SPLIT_RATIO)
         train_videos = all_videos[:split_idx]
         val_videos = all_videos[split_idx:]
         
-        print(f" {label}: {len(train_videos)} Train / {len(val_videos)} Val")
+        print(f"Class '{label}': {len(train_videos)} Train / {len(val_videos)} Val")
 
-        # Function to process a list of videos
+        # Helper function to process a list of videos
         def process_list(video_list, split_name):
             output_folder = os.path.join(dest_dir, split_name, label)
             os.makedirs(output_folder, exist_ok=True)
             
-            # We use tqdm for progress bar
+            # Use tqdm for a progress bar
             for video_file in tqdm(video_list, desc=f"Processing {split_name}/{label}"):
                 video_path = os.path.join(folder_path, video_file)
                 cap = cv2.VideoCapture(video_path)
@@ -89,8 +89,11 @@ def extract_faces_split_fast(source_dir, dest_dir):
                     
                     if frames_buffer:
                         try:
+                            # Use MTCNN to detect and save faces
                             mtcnn(frames_buffer, save_path=save_paths)
-                        except: pass
+                        except Exception as e:
+                            # This can happen if no faces are found in the buffer
+                            pass
                 cap.release()
 
         process_list(train_videos, 'train')

@@ -1,9 +1,5 @@
-torch
-torchvision
-opencv-python
+opencv-python-headless
 facenet-pytorch
-scikit-learn
-tqdm
+streamlit
 numpy
-matplotlib
-pandas
+Pillow
