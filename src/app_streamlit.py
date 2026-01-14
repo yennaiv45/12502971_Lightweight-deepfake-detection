@@ -17,7 +17,7 @@ except ImportError:
 
 # --- CONFIGURATION ---
 # 👇 REMPLACE CECI PAR LE LIEN QUE TU AS COPIÉ DEPUIS TES RELEASES GITHUB
-MODEL_URL = "https://github.com/TON_NOM/TON_REPO/releases/download/v1.0/best_model.pth"
+MODEL_URL = "https://github.com/yennaiv45/12502971_Lightweight-deepfake-detection/releases/download/v1.0/best_model.pth"
 MODEL_FILENAME = "best_model.pth"
 
 st.set_page_config(
